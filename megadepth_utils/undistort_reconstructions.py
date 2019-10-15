@@ -41,7 +41,7 @@ for scene_name in os.listdir(base_depth_path):
     if not os.path.exists(image_path):
         continue
     
-    # Find the maximum image size in scene.
+    # Find the maximum image size(max height or width) in scene.
     max_image_size = 0
     for image_name in os.listdir(image_path):
         max_image_size = max(
@@ -52,6 +52,7 @@ for scene_name in os.listdir(base_depth_path):
     # Undistort the images and update the reconstruction.
     subprocess.call([
         os.path.join(args.colmap_path, 'colmap'), 'image_undistorter', 
+        # os.path.join(args.colmap_path, 'colmap.bat'), 'image_undistorter',
         '--image_path', os.path.join(sfm_path, scene_name, 'images'),
         '--input_path', os.path.join(sfm_path, scene_name, 'sparse', 'manhattan', '0'),
         '--output_path',  current_output_path,
@@ -63,6 +64,7 @@ for scene_name in os.listdir(base_depth_path):
     os.mkdir(sparse_txt_path)
     subprocess.call([
         os.path.join(args.colmap_path, 'colmap'), 'model_converter',
+        # os.path.join(args.colmap_path, 'colmap.bat'), 'model_converter',
         '--input_path', os.path.join(current_output_path, 'sparse'),
         '--output_path', sparse_txt_path, 
         '--output_type', 'TXT'

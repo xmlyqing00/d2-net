@@ -13,7 +13,7 @@ import time
 
 from tqdm import tqdm
 
-from lib.utils import preprocess_image
+from lib.utils import preprocess_image, gct
 
 
 class MegaDepthDataset(Dataset):
@@ -24,17 +24,15 @@ class MegaDepthDataset(Dataset):
             base_path='/local/dataset/megadepth',
             train=True,
             preprocessing=None,
-            min_overlap_ratio=.5,
-            max_overlap_ratio=1,
+            min_overlap_ratio=.5,  # min corresponding points ratio
+            max_overlap_ratio=1,  # max corresponding points ratio
             max_scale_ratio=np.inf,
             pairs_per_scene=100,
             image_size=256
     ):
-        self.scenes = []
         with open(scene_list_path, 'r') as f:
             lines = f.readlines()
-            for line in lines:
-                self.scenes.append(line.strip('\n'))
+            self.scenes = [x.strip('\n') for x in lines]
 
         self.scene_info_path = scene_info_path
         self.base_path = base_path
@@ -58,9 +56,9 @@ class MegaDepthDataset(Dataset):
         if not self.train:
             np_random_state = np.random.get_state()
             np.random.seed(42)
-            print('Building the validation dataset...')
+            print(f'[Info]    {gct()} Building the validation dataset...')
         else:
-            print('Building a new training dataset...')
+            print(f'[Info]    {gct()} Building a new training dataset...')
         for scene in tqdm(self.scenes, total=len(self.scenes)):
             scene_info_path = os.path.join(
                 self.scene_info_path, '%s.npz' % scene
@@ -68,32 +66,39 @@ class MegaDepthDataset(Dataset):
             if not os.path.exists(scene_info_path):
                 continue
             scene_info = np.load(scene_info_path, allow_pickle=True)
+            # 该场景下的照片两两间的重合率(就是3D点的重合率)
             overlap_matrix = scene_info['overlap_matrix']
+            # 该场景下匹配3D点的深度比
             scale_ratio_matrix = scene_info['scale_ratio_matrix']
 
-            valid =  np.logical_and(
-                np.logical_and(
+            # 先找到符合条件的配对场景
+            valid = np.logical_and(
+                np.logical_and(  # 重合率起码达到 0.5
                     overlap_matrix >= self.min_overlap_ratio,
                     overlap_matrix <= self.max_overlap_ratio
                 ),
-                scale_ratio_matrix <= self.max_scale_ratio
+                scale_ratio_matrix <= self.max_scale_ratio  # 尺度变化无所谓, 因为 max_scale_ratio=inf
             )
-            
+
+            # 从里面再随机选 pairs_per_scene 数量的匹配对出来, 用下标 index(ids) 表示
+            # train 是选 100 pairs
+            # validation 是选 25 pairs
             pairs = np.vstack(np.where(valid))
             try:
                 selected_ids = np.random.choice(
                     pairs.shape[1], self.pairs_per_scene
                 )
-            except:
+            except BaseException:
                 continue
-            
-            image_paths = scene_info['image_paths']
-            depth_paths = scene_info['depth_paths']
+
+            image_paths = scene_info['image_paths']  # 图像路径
+            depth_paths = scene_info['depth_paths']  # 深度路径 相机深度 Z_c
+            # 3d_id to 2d (x,y) pixel coordinator in image_id
             points3D_id_to_2D = scene_info['points3D_id_to_2D']
             points3D_id_to_ndepth = scene_info['points3D_id_to_ndepth']
             intrinsics = scene_info['intrinsics']
             poses = scene_info['poses']
-            
+
             for pair_idx in selected_ids:
                 idx1 = pairs[0, pair_idx]
                 idx2 = pairs[1, pair_idx]
@@ -103,17 +108,22 @@ class MegaDepthDataset(Dataset):
                 ))
 
                 # Scale filtering
-                matches_nd1 = np.array([points3D_id_to_ndepth[idx1][match] for match in matches])
-                matches_nd2 = np.array([points3D_id_to_ndepth[idx2][match] for match in matches])
-                scale_ratio = np.maximum(matches_nd1 / matches_nd2, matches_nd2 / matches_nd1)
-                matches = matches[np.where(scale_ratio <= self.max_scale_ratio)[0]]
-                
+                matches_nd1 = np.array(
+                    [points3D_id_to_ndepth[idx1][match] for match in matches])
+                matches_nd2 = np.array(
+                    [points3D_id_to_ndepth[idx2][match] for match in matches])
+                scale_ratio = np.maximum(
+                    matches_nd1 / matches_nd2,
+                    matches_nd2 / matches_nd1)
+                matches = matches[np.where(
+                    scale_ratio <= self.max_scale_ratio)[0]]
+
                 point3D_id = np.random.choice(matches)
                 point2D1 = points3D_id_to_2D[idx1][point3D_id]
                 point2D2 = points3D_id_to_2D[idx2][point3D_id]
                 nd1 = points3D_id_to_ndepth[idx1][point3D_id]
                 nd2 = points3D_id_to_ndepth[idx2][point3D_id]
-                central_match = np.array([
+                central_match = np.array([  # (y, x)
                     point2D1[1], point2D1[0],
                     point2D2[1], point2D2[0]
                 ])
@@ -150,7 +160,9 @@ class MegaDepthDataset(Dataset):
         if image1.mode != 'RGB':
             image1 = image1.convert('RGB')
         image1 = np.array(image1)
-        assert(image1.shape[0] == depth1.shape[0] and image1.shape[1] == depth1.shape[1])
+        image1_size = image1.shape  # (h, w)
+        assert(image1.shape[0] == depth1.shape[0]
+               and image1.shape[1] == depth1.shape[1])
         intrinsics1 = pair_metadata['intrinsics1']
         pose1 = pair_metadata['pose1']
 
@@ -167,7 +179,9 @@ class MegaDepthDataset(Dataset):
         if image2.mode != 'RGB':
             image2 = image2.convert('RGB')
         image2 = np.array(image2)
-        assert(image2.shape[0] == depth2.shape[0] and image2.shape[1] == depth2.shape[1])
+        image2_size = image2.shape  # (h, w)
+        assert(image2.shape[0] == depth2.shape[0]
+               and image2.shape[1] == depth2.shape[1])
         intrinsics2 = pair_metadata['intrinsics2']
         pose2 = pair_metadata['pose2']
 
@@ -175,17 +189,17 @@ class MegaDepthDataset(Dataset):
         image1, bbox1, image2, bbox2 = self.crop(image1, image2, central_match)
 
         depth1 = depth1[
-            bbox1[0] : bbox1[0] + self.image_size,
-            bbox1[1] : bbox1[1] + self.image_size
+            bbox1[0]: bbox1[0] + self.image_size,
+            bbox1[1]: bbox1[1] + self.image_size
         ]
         depth2 = depth2[
-            bbox2[0] : bbox2[0] + self.image_size,
-            bbox2[1] : bbox2[1] + self.image_size
+            bbox2[0]: bbox2[0] + self.image_size,
+            bbox2[1]: bbox2[1] + self.image_size
         ]
 
         return (
-            image1, depth1, intrinsics1, pose1, bbox1,
-            image2, depth2, intrinsics2, pose2, bbox2
+            image1, depth1, intrinsics1, pose1, bbox1, image1_size,
+            image2, depth2, intrinsics2, pose2, bbox2, image2_size
         )
 
     def crop(self, image1, image2, central_match):
@@ -205,21 +219,21 @@ class MegaDepthDataset(Dataset):
 
         return (
             image1[
-                bbox1_i : bbox1_i + self.image_size,
-                bbox1_j : bbox1_j + self.image_size
+                bbox1_i: bbox1_i + self.image_size,
+                bbox1_j: bbox1_j + self.image_size
             ],
             np.array([bbox1_i, bbox1_j]),
             image2[
-                bbox2_i : bbox2_i + self.image_size,
-                bbox2_j : bbox2_j + self.image_size
+                bbox2_i: bbox2_i + self.image_size,
+                bbox2_j: bbox2_j + self.image_size
             ],
             np.array([bbox2_i, bbox2_j])
         )
 
     def __getitem__(self, idx):
         (
-            image1, depth1, intrinsics1, pose1, bbox1,
-            image2, depth2, intrinsics2, pose2, bbox2
+            image1, depth1, intrinsics1, pose1, bbox1, image1_size,
+            image2, depth2, intrinsics2, pose2, bbox2, image2_size
         ) = self.recover_pair(self.dataset[idx])
 
         image1 = preprocess_image(image1, preprocessing=self.preprocessing)
@@ -231,9 +245,11 @@ class MegaDepthDataset(Dataset):
             'intrinsics1': torch.from_numpy(intrinsics1.astype(np.float32)),
             'pose1': torch.from_numpy(pose1.astype(np.float32)),
             'bbox1': torch.from_numpy(bbox1.astype(np.float32)),
+            'image1_size': torch.from_numpy(np.array(image1_size)),
             'image2': torch.from_numpy(image2.astype(np.float32)),
             'depth2': torch.from_numpy(depth2.astype(np.float32)),
             'intrinsics2': torch.from_numpy(intrinsics2.astype(np.float32)),
             'pose2': torch.from_numpy(pose2.astype(np.float32)),
-            'bbox2': torch.from_numpy(bbox2.astype(np.float32))
+            'bbox2': torch.from_numpy(bbox2.astype(np.float32)),
+            'image2_size': torch.from_numpy(np.array(image2_size))
         }
