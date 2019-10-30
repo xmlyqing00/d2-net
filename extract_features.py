@@ -16,9 +16,7 @@ from lib.model_test import D2Net
 from lib.utils import preprocess_image
 from lib.pyramid import process_multiscale
 
-# CUDA
-use_cuda = torch.cuda.is_available()
-device = torch.device("cuda:0" if use_cuda else "cpu")
+
 
 # Argument parsing
 parser = argparse.ArgumentParser(description='Feature extraction script')
@@ -56,6 +54,11 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    '--cpu', action='store_true',
+    help='Disable GPU'
+)
+
+parser.add_argument(
     '--multiscale', dest='multiscale', action='store_true',
     help='extract multiscale features'
 )
@@ -70,6 +73,16 @@ parser.set_defaults(use_relu=True)
 args = parser.parse_args()
 
 print(args)
+
+# CUDA
+if args.cpu:
+    device = torch.device('cpu')
+    use_cuda = False
+else:
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda:0" if use_cuda else "cpu")
+
+print(device)
 
 # Creating CNN model
 model = D2Net(
