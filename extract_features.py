@@ -147,6 +147,8 @@ for line in tqdm(lines, total=len(lines)):
     # i, j -> u, v
     keypoints = keypoints[:, [1, 0, 2]]
 
+    continue
+
     if args.output_type == 'npz':
         with open(path + args.output_extension, 'wb') as output_file:
             np.savez(
