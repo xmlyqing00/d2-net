@@ -10,4 +10,4 @@ export output_path=$2
 
 mkdir $output_path
 echo 0
-ls $dataset_path/Undistorted_SfM | xargs -P 8 -I % sh -c 'echo %; python preprocess_scene.py --base_path $dataset_path --scene_id % --output_path $output_path'
+ls $dataset_path/Undistorted_SfM | xargs -P 8 -I % sh -c 'echo %; python3 preprocess_scene.py --base_path $dataset_path --scene_id % --output_path $output_path'

@@ -54,6 +54,7 @@ class SoftDetectionModule(nn.Module):
         self.soft_local_max_size = soft_local_max_size
 
         self.pad = self.soft_local_max_size // 2
+        self.scale = 1000
 
     def forward(self, batch):
         b = batch.size(0)

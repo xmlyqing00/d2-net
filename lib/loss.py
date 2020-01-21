@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 from lib.utils import (
@@ -16,6 +17,135 @@ from lib.utils import (
 from lib.exceptions import NoGradientError, EmptyTensorError
 
 matplotlib.use('Agg')
+
+class D2Loss_hpatches(nn.Module):
+
+    def __init__(self, scaling_steps=3, margin=1, safe_radius=4, device=torch.device("cuda")):
+        super(D2Loss_hpatches, self).__init__()
+        self.device = device
+        self.scaling_steps = scaling_steps
+        self.safe_radius = safe_radius
+        self.margin = margin
+        self.scale = 10000
+
+    def forward(self, sample, output, plot=False):
+
+        c, h1, w1 = output['dense_features1'].shape
+        s1 = output['scores1'].view(-1)
+
+        _, h2, w2 = output['dense_features1'].shape
+        s2 = output['scores2'].squeeze(0)
+
+        all_des1 = F.normalize(output['dense_features1'].view(c, -1), dim=0)
+        all_des2 = F.normalize(output['dense_features2'], dim=0)
+
+        fmap_pos1 = grid_positions(h1, w1, self.device)
+        pos1 = upscale_positions(fmap_pos1, scaling_steps=self.scaling_steps)
+        des1 = all_des1
+
+        pos1, ids = self.check_boundary(pos1, sample['image1'].shape)
+        if ids.shape[0] < pos1.shape[1]:
+            fmap_pos1 = fmap_pos1[:, ids]
+            des1 = des1[:, ids]
+            s1 = s1[ids]
+
+        pos1_homo = torch.cat(
+            [pos1, torch.ones(1, pos1.shape[1], device=self.device)],
+            dim=0
+        )
+        pos2_homo = torch.matmul(sample['homo12'].squeeze(0), pos1_homo)
+        pos2 = pos2_homo[:2, :] / (pos2_homo[2, :] + 1e-8)
+        try:
+            pos2, ids = self.check_boundary(pos2, sample['image1'].shape)
+        except EmptyTensorError:
+            raise NoGradientError
+
+        fmap_pos1 = fmap_pos1[:, ids]
+        des1 = des1[:, ids]
+        s1 = s1[ids]
+
+        fmap_pos2 = torch.round(downscale_positions(pos2, scaling_steps=self.scaling_steps)).long()
+        des2 = all_des2[:, fmap_pos2[0, :], fmap_pos2[1, :]].view(c, -1)
+        all_des2 = all_des2.view(c, -1)
+        s2 = s2[fmap_pos2[0, :], fmap_pos2[1, :]].view(-1)  # (173) # 取出 score 2
+
+        # important
+        # (173, 1, 512) @ (173, 512, 1) => (173, 1, 1) => squeeze => (173)
+        positive_dist = 2 - 2 * (
+            des1.t().unsqueeze(1) @ des2.t().unsqueeze(2)
+        ).squeeze()
+
+        all_fmap_pos2 = grid_positions(h2, w2, self.device)
+        pos_dist = torch.max(
+            torch.abs(fmap_pos2.unsqueeze(2).float() - all_fmap_pos2.unsqueeze(1)),
+            dim=0
+        )[0]
+        is_out_of_safe_radius = pos_dist > self.safe_radius
+
+        # (173, 1024) # 计算图像1点和所有图2点的特征距离
+        dist_mat = 2 - 2 * (des1.t() @ all_des2)
+        negative_dist2 = torch.min(  # 剔除掉近邻的点, 也就是在4个像素距离内(包含4个像素)的点, 然后找 descriptor 1 的 hardest negative sample
+            dist_mat + (1 - is_out_of_safe_radius.float()) * 10.,
+            dim=1
+        )[0]  # (173) 找到 hardest negative sample
+
+        # 将刚才针对 图像1 的计算再在 图像2 上进行一遍来找 descriptor 2 的 hardest negative sample
+        all_fmap_pos1 = grid_positions(h1, w1, self.device)
+        pos_dist = torch.max(
+            torch.abs(fmap_pos1.unsqueeze(2).float() - all_fmap_pos1.unsqueeze(1)),
+            dim=0
+        )[0]
+        is_out_of_safe_radius = pos_dist > self.safe_radius
+
+        dist_mat = 2 - 2 * (des2.t() @ all_des1)
+        negative_dist1 = torch.min(
+            dist_mat + (1 - is_out_of_safe_radius.float()) * 10.,
+            dim=1
+        )[0]
+        # hard loss
+        diff = positive_dist - torch.min(negative_dist1, negative_dist2)
+        s = s1 * s2
+        # 这里用 F.relu 取代了 hard_loss 中的 max() 函数
+        loss = torch.sum(s * F.relu(self.margin + diff)) / (torch.sum(s) + 1e-8)
+        # 这里希望 F.relu(margin + diff) 越小的话 scores1 * scores2 越大越好
+
+        loss = loss * self.scale
+
+        return loss
+        
+
+    def check_boundary(self, pos, ori_shape):
+
+        _, _, h, w, = ori_shape
+
+        i = pos[0, :]  # y coordinator
+        j = pos[1, :]  # x coordinator
+
+        # Valid corners
+        i_floor = torch.floor(i).long()
+        j_floor = torch.floor(j).long()
+        i_ceil = torch.ceil(i).long()
+        j_ceil = torch.ceil(j).long()
+
+        valid_top_left = torch.min(i_floor >= 0, j_floor >= 0)
+        valid_top_right = torch.min(i_floor >= 0, j_ceil < w)
+        valid_bottom_left = torch.min(i_ceil < h, j_floor >= 0)
+        valid_bottom_right = torch.min(i_ceil < h, j_ceil < w)
+
+        valid_corners = torch.min(
+            torch.min(valid_top_left, valid_top_right),
+            torch.min(valid_bottom_left, valid_bottom_right)
+        )
+
+        ids = torch.arange(0, pos.size(1), device=self.device)  # 32*32=1024
+        ids = ids[valid_corners]
+        if ids.size(0) == 0:
+            raise EmptyTensorError
+
+        pos = pos[:, ids]
+
+        return pos, ids
+
 
 
 def loss_function(
