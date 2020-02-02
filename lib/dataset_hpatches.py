@@ -13,11 +13,10 @@ from lib.tensor import im_rescale
 
 class HPatchesDataset(Dataset):
 
-    def __init__(self, csv_file, root_dir, output_size=None, transform=None, test_flag=False):
+    def __init__(self, csv_file, root_dir, transform=None, test_flag=False):
 
         self.root_dir = root_dir
         self.hpatches_frame = pd.read_csv(os.path.join(root_dir, csv_file))
-        self.output_size = output_size
         self.transform = transform
         self.test_flag = test_flag
 
@@ -45,7 +44,9 @@ class HPatchesDataset(Dataset):
                 'image1': self.transform(img1),
                 'image2': self.transform(img2),
                 'homo12': torch.from_numpy(np.asarray(homo12)),
-                'homo21': torch.from_numpy(np.asarray(homo21))
+                'homo21': torch.from_numpy(np.asarray(homo21)),
+                'image1_raw': TF.to_tensor(img1),
+                'image2_raw': TF.to_tensor(img2)
             }
         else:
             sample = {
@@ -58,8 +59,8 @@ class HPatchesDataset(Dataset):
             if self.transform:
                 sample = self.transform(sample)
 
-        sample["name1"] = img1_name
-        sample["name2"] = img2_name
+        sample["name1"] = f'{object_name}_{img1_name}'
+        sample["name2"] = f'{object_name}_{img2_name}'
         # sample["file"] = self.files[idx]
 
         return sample

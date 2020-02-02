@@ -1,5 +1,6 @@
 import os
 import cv2
+import numpy as np
 from skimage import transform
 import torch
 import torch.nn.functional as NF
@@ -24,9 +25,9 @@ def parse_output(output):
     return output
 
 def parse_batch_test(batch, device):
-    batch['img1'] = batch['img1'].to(device, dtype=torch.float)
+    batch['image1'] = batch['image1'].to(device, dtype=torch.float)
     batch['homo12'] = batch['homo12'].to(device, dtype=torch.float)
-    batch['img2'] = batch['img2'].to(device, dtype=torch.float)
+    batch['image2'] = batch['image2'].to(device, dtype=torch.float)
     batch['homo21'] = batch['homo21'].to(device, dtype=torch.float)
     return batch
 
@@ -242,9 +243,9 @@ def distance_matrix_vector(anchor, positive):
     :return:
     """
     eps = 1e-8
-    FeatSimi_Mat = 2 - 2 * torch.mm(anchor, positive.t())  # [0, 4]
-    FeatSimi_Mat = FeatSimi_Mat.clamp(min=eps, max=4.0)
-    FeatSimi_Mat = torch.sqrt(FeatSimi_Mat)  # euc [0, 2]
+    FeatSimi_Mat = 2 - 2 * (anchor.dot(np.transpose(positive)))  # [0, 4]
+    FeatSimi_Mat = np.clip(FeatSimi_Mat, eps, 4.0)
+    FeatSimi_Mat = np.sqrt(FeatSimi_Mat)  # euc [0, 2]
     return FeatSimi_Mat
 
 

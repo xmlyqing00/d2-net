@@ -15,3 +15,7 @@ vlfeat
 
 .idea/
 logs/
+
+results_author/
+results_train_MegaDepth/
+results_train_hpatches/

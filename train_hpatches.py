@@ -318,7 +318,6 @@ for epoch_idx in range(start_epoch, int(cfg['params']['total_epochs'])):
         torch.save(checkpoint, checkpoint_path)
 
         print('Model saved.')
-    else:
-        print('')
+    print('')
 
     scheduler.step()
